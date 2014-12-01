@@ -1,7 +1,8 @@
 (ns org.noisesmith.nethacker
   (:require [schema.core :as schema])
   (:gen-class)
-  (:import (java.util Date)))
+  (:import (java.util Date)
+           (java.io StringReader PushbackReader)))
 
 (def GameData
   "a schema for the state of a nethack game process interaction"
@@ -42,15 +43,25 @@
     (let [counter (get game counter-future)]
       (if (and (realized? counter)
                (>= @counter 0))
-        (let [data (subs (String. buff) 0 @counter)]
-          (when (and (not-empty data)
+        (let [raw (subs (String. buff) 0 @counter)
+              reader (try (-> raw
+                              java.io.StringReader.
+                              java.io.PushbackReader.)
+                          (catch Exception _ false))
+              forms (when reader
+                      ((fn getd []
+                         (when-let [form (try (read reader)
+                                              (catch Exception e false))]
+                           (cons form (getd))))))]
+          (when (and (not-empty raw)
                      (:debug game))
-            (println output-type \: data))
+            (println output-type \: raw))
           (assoc game
             counter-future (get-more stream buff)
             :out (conj (:out game) {:when (Date.)
                                     :type output-type
-                                    :data data})))
+                                    :raw raw
+                                    :data forms})))
         game))))
 
 (schema/defn hack-loop :- GameData
