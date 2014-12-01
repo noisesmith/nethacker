@@ -1,55 +1,92 @@
 (ns org.noisesmith.nethacker
-  (:gen-class))
+  (:require [schema.core :as schema])
+  (:gen-class)
+  (:import (java.util Date)))
 
-(defonce game (atom nil))
+(def GameData
+  "a schema for the state of a nethack game process interaction"
+  {:name schema/Str
+   :process java.lang.Process
+   :in-buff bytes
+   :err-buff bytes
+   :in-bytes clojure.lang.IDeref ;; an int
+   :err-bytes clojure.lang.IDeref ;; an int
+   :debug schema/Bool
+   :out [{}]})
 
-(defn write-input
-  [s]
-  (doto (.getOutputStream (:process @game))
+(schema/defn write-input :- nil
+  [game :- GameData
+   s :- schema/Str]
+  (doto (.getOutputStream (:process game))
     (.write (.getBytes s))
     (.flush))
   nil)
 
-(defn letter-command
-  [c]
-  (write-input (str (int c) "\n")))
+(schema/defn letter-command :- nil
+  [game :- GameData
+   c :- Character]
+  (write-input game (str (int c) "\n")))
 
-(defn get-more
-  [source buff]
+(schema/defn get-more :- clojure.lang.IDeref
+  [source :- java.io.InputStream
+   buff :- bytes]
   (future (.read source buff)))
 
-(defn hack-loop
-  [] 
-  (let [{:keys [process in-buff err-buff in-bytes err-bytes]} @game
+(schema/defn handle-output :- GameData
+  [buff :- bytes
+   stream :- java.io.InputStream
+   counter-future :- schema/Keyword
+   output-type :- schema/Symbol]
+  (schema/fn output-handler :- GameData
+    [game :- GameData]
+    (let [counter (get game counter-future)]
+      (if (and (realized? counter)
+               (>= @counter 0))
+        (let [data (subs (String. buff) 0 @counter)]
+          (when (and (not-empty data)
+                     (:debug game))
+            (println output-type \: data))
+          (assoc game
+            counter-future (get-more stream buff)
+            :out (conj (:out game) {:when (Date.)
+                                    :type output-type
+                                    :data data})))
+        game))))
+
+(schema/defn hack-loop :- GameData
+  [game :- GameData]
+  (let [{:keys [process in-buff err-buff debug]} game
         in-stream (.getInputStream process)
         err-stream (.getErrorStream process)
-        out-stream (.getOutputStream process)
-        next-in (delay (get-more in-stream in-buff))
-        next-err (delay )]
-    (when (realized? err-bytes)
-      (when (> @err-bytes 0)
-        (println "Error: " (subs (String. err-buff) 0 @err-bytes)))
-      (swap! game assoc :err-bytes (get-more err-stream err-buff)))
-    (when (realized? in-bytes)
-      (when (> @in-bytes 0)
-        ;; bind input, read, dispatch what is read
-        (println "In: " (subs (String. in-buff) 0 @in-bytes)))
-      (swap! game assoc :in-bytes (get-more in-stream in-buff)))
-    (if-not (.isAlive process)
-      (println "game exited"))))
+        handle-err (handle-output err-buff err-stream :err-bytes 'stderr)
+        handle-in (handle-output in-buff in-stream :in-bytes 'stdout)]
+    (-> game
+        handle-err
+        handle-in
+        (#(if-not (.isAlive process)
+             (do (println "game exited, code" (.exitValue process))
+                 (assoc % :process nil
+                        :return (.exitValue process)))
+             %)))))
 
-(defn run-hack
-  [& [name]]
-  (let [pb (ProcessBuilder. ["/usr/games/nethack-lisp" "-u" (or name "cloj")])
+(schema/defn run-hack :- GameData
+  [& [name :- schema/Str]]
+  (let [name (or name "cloj")
+        args ["/usr/games/nethack-lisp" "-u" name]
+        pb (ProcessBuilder. args)
         process (.start pb)
         in-buff (byte-array 32768)
         err-buff (byte-array 32768)
         fut (doto (delay 0) force)]
-    (reset! game {:process process
-                  :in-buff in-buff
-                  :err-buff err-buff
-                  :in-bytes fut
-                  :err-bytes fut})))
+    {:name name
+     :process process
+     :in-buff in-buff
+     :err-buff err-buff
+     :in-bytes fut
+     :err-bytes fut
+     :debug true
+     :out []}))
+
 (defn -main
   "runs a nethack game"
   [& [name :as args]]

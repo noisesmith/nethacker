@@ -3,7 +3,8 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.7.0-alpha4"]]
+  :dependencies [[org.clojure/clojure "1.7.0-alpha4"]
+                 [prismatic/schema "0.3.3"]]
   :main ^:skip-aot org.noisesmith.nethacker
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})
